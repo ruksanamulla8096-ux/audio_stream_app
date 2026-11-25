@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastAPI Audio Streamer</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 500px; margin: 50px auto; padding: 0 20px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-right: 10px; }
+        #status { margin-top: 20px; font-weight: bold; }
+        #server-log { margin-top: 10px; color: #555; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <h2>Microphone WebSocket Streamer</h2>
+    <button id="startBtn">Start Streaming</button>
+    <button id="stopBtn" disabled>Stop Streaming</button>
+    
+    <div id="status">Status: Idle</div>
+    <div id="server-log"></div>
+
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const statusDiv = document.getElementById('status');
+        const serverLog = document.getElementById('server-log');
+
+        let websocket;
+        let mediaRecorder;
+        let audioStream;
+
+        startBtn.onclick = async () => {
+            try {
+                // 1. Capture microphone audio
+                audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                // 2. Open WebSocket connection (automatically uses wss:// if on HTTPS)
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                websocket = new WebSocket(`${wsProtocol}//${window.location.host}/ws/audio`);
+
+                websocket.onopen = () => {
+                    statusDiv.textContent = 'Status: Connected & Streaming...';
+                    startBtn.disabled = true;
+                    stopBtn.disabled = false;
+
+                    // 3. Initialize MediaRecorder
+                    mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+
+                    // Send each audio chunk to FastAPI as soon as it's available
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0 && websocket.readyState === WebSocket.OPEN) {
+                            websocket.send(event.data);
+                        }
+                    };
+
+                    // Collect and emit chunks every 250ms
+                    mediaRecorder.start(250);
+                };
+
+                websocket.onmessage = (event) => {
+                    serverLog.textContent = event.data;
+                };
+
+                websocket.onclose = () => {
+                    cleanup();
+                    statusDiv.textContent = 'Status: Disconnected';
+                };
+
+                websocket.onerror = (err) => {
+                    console.error('WebSocket Error:', err);
+                    statusDiv.textContent = 'Status: Connection Error';
+                };
+
+            } catch (err) {
+                console.error('Microphone access denied or error:', err);
+                statusDiv.textContent = 'Status: Microphone Error (Check Permissions)';
+            }
+        };
+
+        stopBtn.onclick = () => {
+            cleanup();
+            statusDiv.textContent = 'Status: Stopped';
+        };
+
+        function cleanup() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            if (audioStream) {
+                audioStream.getTracks().forEach(track => track.stop());
+            }
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                websocket.close();
+            }
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        }
+    </script>
+</body>
+</html>
